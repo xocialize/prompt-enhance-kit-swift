@@ -33,6 +33,25 @@ final class PromptEnhanceKitTests: XCTestCase {
         XCTAssertTrue(EnhanceTask.characterReplacement.needsVision)
     }
 
+    // MARK: - LTX-2.3 profile (UPE1-LTX)
+
+    func testLTXProfileOverridesVideoTemplatesOnly() {
+        let lib = TemplateLibrary.ltxVideo()
+        XCTAssertEqual(lib.template(for: .textToVideo, task: .textToVideo), LTXVideoProfile.textToVideo)
+        XCTAssertEqual(lib.template(for: .textToVideo, task: .imageToVideo), LTXVideoProfile.imageToVideo)
+        // Image seed untouched.
+        XCTAssertEqual(lib.template(for: .textToImage, task: .textToImage),
+                       TemplateLibrary().template(for: .textToImage, task: .textToImage))
+    }
+
+    func testLTXRegisterOntoExistingLibrary() {
+        var lib = TemplateLibrary()
+        let neutral = lib.template(for: .textToVideo, task: .textToVideo)
+        lib.registerLTXVideoProfile()
+        XCTAssertNotEqual(lib.template(for: .textToVideo, task: .textToVideo), neutral)
+        XCTAssertEqual(lib.template(for: .textToVideo, task: .textToVideo), LTXVideoProfile.textToVideo)
+    }
+
     // MARK: - Request shape
 
     func testMakeRequestIsPromptEnhanceModeWithSystemAndUser() {
@@ -51,6 +70,18 @@ final class PromptEnhanceKitTests: XCTestCase {
         let req = PromptEnhancer().makeRequest("a city", template: PromptEnhanceTemplate(system: "S"),
                                                targetSize: (1024, 768))
         XCTAssertTrue(req.messages[1].content.contains("1024x768"), "size hint missing: \(req.messages[1].content)")
+    }
+
+    func testMakeRequestAppendsTargetDurationToUserTurn() {
+        let req = PromptEnhancer().makeRequest("a city", template: PromptEnhanceTemplate(system: "S"),
+                                               targetDuration: 121.0 / 24.0)  // 121f @ 24fps → ~5s
+        XCTAssertTrue(req.messages[1].content.contains("~5 seconds"), "duration hint missing: \(req.messages[1].content)")
+    }
+
+    func testMakeRequestOmitsNonPositiveDuration() {
+        let req = PromptEnhancer().makeRequest("a city", template: PromptEnhanceTemplate(system: "S"),
+                                               targetDuration: 0)
+        XCTAssertEqual(req.messages[1].content, "a city")
     }
 
     // MARK: - Enhance + the (critical) raw-fallback contract

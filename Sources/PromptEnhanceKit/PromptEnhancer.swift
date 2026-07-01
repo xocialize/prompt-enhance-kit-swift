@@ -31,9 +31,11 @@ public struct PromptEnhancer: Sendable {
                         capability: Capability,
                         task: EnhanceTask,
                         targetSize: (width: Int, height: Int)? = nil,
+                        targetDuration: Double? = nil,
                         run: Runner) async -> String {
         guard let template = library.template(for: capability, task: task) else { return prompt }
-        let request = makeRequest(prompt, template: template, targetSize: targetSize)
+        let request = makeRequest(prompt, template: template, targetSize: targetSize,
+                                  targetDuration: targetDuration)
         do {
             let text = try await run(request).trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? prompt : text
@@ -43,13 +45,19 @@ public struct PromptEnhancer: Sendable {
     }
 
     /// The exact `.promptEnhance` request the enhancer would run — exposed for inspection/testing.
-    /// The size hint rides the user turn (backbone-agnostic) rather than `metaData`, so any `.llm`
-    /// package honors it without knowing a package-specific convention.
+    /// The size/duration hints ride the user turn (backbone-agnostic) rather than `metaData`, so any
+    /// `.llm` package honors them without knowing a package-specific convention. The duration hint
+    /// exists for video: prompt detail should scale with clip length (a short prompt for a long clip
+    /// leaves the model rushing the action — the LTX-2.3 guide's "long videos need long prompts").
     public func makeRequest(_ prompt: String,
                             template: PromptEnhanceTemplate,
-                            targetSize: (width: Int, height: Int)? = nil) -> LLMRequest {
+                            targetSize: (width: Int, height: Int)? = nil,
+                            targetDuration: Double? = nil) -> LLMRequest {
         var user = prompt
         if let s = targetSize { user += "\n\nTarget resolution: \(s.width)x\(s.height)." }
+        if let d = targetDuration, d > 0 {
+            user += "\n\nTarget duration: ~\(Int(d.rounded())) seconds of video — describe enough action and detail to fill it."
+        }
         return LLMRequest(
             messages: [
                 ChatMessage(role: .system, content: template.system),
