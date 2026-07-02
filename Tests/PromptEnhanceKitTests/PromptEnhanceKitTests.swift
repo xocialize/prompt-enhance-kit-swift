@@ -84,6 +84,43 @@ final class PromptEnhanceKitTests: XCTestCase {
         XCTAssertEqual(req.messages[1].content, "a city")
     }
 
+    // MARK: - Host-provided chat model (`generate:` overload, BRIDGE-LTX-003)
+
+    func testGenerateOverloadReceivesTemplateSystemAndHintedUserTurn() async {
+        actor Captured { var system = ""; var user = ""; func set(_ s: String, _ u: String) { system = s; user = u } }
+        let captured = Captured()
+        let out = await PromptEnhancer(library: .ltxVideo()).enhance(
+            "a red fox", capability: .textToVideo, task: .textToVideo,
+            targetSize: (704, 512), targetDuration: 5) { system, user in
+                await captured.set(system, user)
+                return "enhanced"
+            }
+        XCTAssertEqual(out, "enhanced")
+        let system = await captured.system
+        let user = await captured.user
+        XCTAssertEqual(system, LTXVideoProfile.textToVideo.system)
+        XCTAssertTrue(user.hasPrefix("a red fox"))
+        XCTAssertTrue(user.contains("704x512"))
+        XCTAssertTrue(user.contains("~5 seconds"))
+    }
+
+    func testGenerateOverloadFallsBackOnThrowEmptyAndNoTemplate() async {
+        struct Boom: Error {}
+        let enhancer = PromptEnhancer()
+        let threw = await enhancer.enhance("keep me", capability: .textToVideo, task: .textToVideo) {
+            (_: String, _: String) in throw Boom()
+        }
+        XCTAssertEqual(threw, "keep me")
+        let empty = await enhancer.enhance("keep me", capability: .textToVideo, task: .textToVideo) {
+            (_: String, _: String) in "   "
+        }
+        XCTAssertEqual(empty, "keep me")
+        let none = await enhancer.enhance("keep me", capability: .characterAnimation, task: .characterReplacement) {
+            (_: String, _: String) in "should not be used"
+        }
+        XCTAssertEqual(none, "keep me")
+    }
+
     // MARK: - Enhance + the (critical) raw-fallback contract
 
     func testEnhanceReturnsRunnerText() async {

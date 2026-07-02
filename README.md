@@ -19,6 +19,8 @@ package backs it, and its text drives any `textToImage` / `textToVideo` / `chara
 
 ## Use
 
+Engine-backed — any registered `.llm` package answers the request:
+
 ```swift
 import PromptEnhanceKit
 import MLXToolKit
@@ -31,8 +33,32 @@ let rich = await enhancer.enhance(
 }
 ```
 
+Host-provided chat model — **no `.llm` package required.** If the host already carries a
+chat-capable text model (e.g. LTX-2's text encoder is instruction-tuned Gemma-3), drive it directly
+with the `generate:` overload; the kit hands you the assembled (system, user) turns:
+
+```swift
+let rich = await enhancer.enhance(
+    "a red fox in snow", capability: .textToVideo, task: .textToVideo,
+    targetDuration: 5
+) { system, user in
+    try await myChatModel.respond(system: system, user: user)   // e.g. mlx-swift-lm ChatSession
+}
+```
+
+Both transports share the template selection, hint assembly, and the raw-prompt fallback.
+
+> ⚠️ **Never let an enhancer integration force a VLM-capable model package into a host.**
+> `mlx-swift-lm`'s model-type registry is process-global and probes VLM factories before LLM ones;
+> a linked MLXVLM shadows architectures registered by both (e.g. `gemma3` then resolves to the
+> multimodal `Gemma3` instead of `Gemma3TextModel`), breaking hosts that auto-dispatch text models —
+> at **link time**, even if enhancement is never invoked. If the host has any text model of its own,
+> prefer the `generate:` overload; if you register a backbone package, pick one that links MLXLLM
+> only.
+
 The seed templates are neutral, original text (no copied or unlicensed content, no content-policy rules);
-register model-tuned profiles for specific backbones as needed.
+register model-tuned profiles for specific backbones as needed (`TemplateLibrary.ltxVideo()` ships the
+LTX-2.3 profile).
 
 ## License
 
