@@ -84,6 +84,30 @@ final class PromptEnhanceKitTests: XCTestCase {
         XCTAssertEqual(req.messages[1].content, "a city")
     }
 
+    // Contract 1.33.0 (`LLMParameters.seed`) reached this kit with NO code change: `parameters`
+    // is caller-supplied and `makeRequest` passes it through verbatim, so a caller pins the
+    // enhancement by constructing the enhancer with a seed. AB-R-0079 audited that as the reason
+    // the fix was two edits in two other repos and none here — this test is what keeps the claim
+    // true. Enhancement rewrites the prompt a generation then consumes, so an unpinnable enhancer
+    // makes the whole run irreproducible even with the generation seed fixed.
+    func testMakeRequestForwardsCallerSuppliedSeedVerbatim() {
+        let template = PromptEnhanceTemplate(system: "SYS")
+
+        // Default enhancer: unpinned, exactly as before 1.33.0 — nil means system entropy.
+        XCTAssertNil(PromptEnhancer().makeRequest("a red fox", template: template).parameters.seed)
+
+        // Pinned enhancer: the seed rides the canonical request untouched, and no metaData
+        // dialect is involved (the LFM-style `metaData["seed"]` route this kit could never use).
+        let pinned = PromptEnhancer(library: .ltxVideo(),
+                                    parameters: LLMParameters(temperature: 0.7, maxTokens: 512,
+                                                              seed: 10))
+        let req = pinned.makeRequest("a red fox", template: template)
+        XCTAssertEqual(req.parameters.seed, 10)
+        XCTAssertEqual(req.parameters.temperature, 0.7)
+        XCTAssertEqual(req.parameters.maxTokens, 512)
+        XCTAssertTrue(req.metaData.isEmpty)
+    }
+
     // MARK: - Host-provided chat model (`generate:` overload, BRIDGE-LTX-003)
 
     func testGenerateOverloadReceivesTemplateSystemAndHintedUserTurn() async {

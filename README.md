@@ -17,6 +17,29 @@ package backs it, and its text drives any `textToImage` / `textToVideo` / `chara
 - `PromptEnhancer` — builds the request, runs it on your `Runner`, and **always falls back to the raw
   prompt** (on no template, a thrown error, or an empty result) so enhancement never blocks generation.
 
+## Reproducible enhancement
+
+`PromptEnhancer.parameters` is caller-supplied and forwarded onto the request verbatim, so pinning
+the enhancement is pinning the sampler:
+
+```swift
+let enhancer = PromptEnhancer(
+    library: .ltxVideo(),
+    parameters: LLMParameters(temperature: 0.7, maxTokens: 512, seed: 10))  // engine ≥ 0.45.0
+```
+
+The default is `LLMParameters(temperature: 0.7, maxTokens: 512)` — sampling on, **seed nil**, which
+means the sampler is seeded from system entropy and the same brief returns a different enhancement
+every call. That is not a detail: enhancement rewrites the prompt your generation then consumes, so
+an unpinned enhancer makes the whole run irreproducible even when the generation seed is fixed —
+the video changes because its prompt changed. Measured through the governed Gemma path
+(`prompt-enhance-e2e-gemma --seed-gate`): seed 10 reproduces byte-identically across two separate
+model loads, seed 4242 diverges at char 24, and two `nil`-seed runs diverge at char 36.
+
+The seed rides the canonical `LLMParameters.seed` (contract 1.33.0) — no per-package `metaData`
+dialect, so the same code pins whichever `.llm` package answers. Packages that decode greedily may
+ignore it; their output does not vary anyway.
+
 ## Use
 
 Engine-backed — any registered `.llm` package answers the request:
