@@ -83,6 +83,51 @@ The seed templates are neutral, original text (no copied or unlicensed content, 
 register model-tuned profiles for specific backbones as needed (`TemplateLibrary.ltxVideo()` ships the
 LTX-2.3 profile).
 
+## Model profiles (v0.5)
+
+Templates are the neutral, model-agnostic layer. A **profile** is one model's enhancer, as data. It holds:
+- an instruction per task, with an optional Chinese variant chosen when the brief contains CJK ideographs;
+- how to read the answer: text, optionally joined to one line, or JSON, constrained where the backbone supports it;
+- a suffix;
+- when to pass a prompt through as typed;
+- the backbone class it needs;
+- sampler overrides;
+- where its text came from, and under what licence.
+
+`ProfileLibrary` keys profiles by the model ids they serve. `ProfileLibrary.imageModels()` ships the image engine's
+text-to-image profiles (AB-D-0155, phase E1):
+
+| Profile | Models | Policy | Text |
+|---|---|---|---|
+| `z-image` | z-image-turbo, z-image | optional (the vendor's demo ships it off) | Tongyi's expander, verbatim (Apache-2.0) |
+| `qwen-image` | qwen-image-flash | recommended | Qwen-Image's EN/ZH rewriter and suffix, verbatim (Apache-2.0) |
+| `flux2-klein` | klein-4b, klein-4b-base | recommended | original, following BFL's guidance |
+| `mage-flow` | mage-flow, mage-flow-turbo | optional | original |
+
+FLUX 3 Klein has no profile: BFL's own upsampler runs inside flux3-klein-swift. The vendor texts' sources are pinned in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+```swift
+let library = ProfileLibrary.imageModels()
+guard let profile = library.profile(forModel: "qwen-image-flash") else { return }
+let result = try await PromptEnhancer(parameters: LLMParameters(temperature: 0.7, maxTokens: 512, seed: jobSeed))
+    .enhance(brief, profile: profile, task: .textToImage, mode: .auto, timeout: .seconds(60)) { request in
+        (try await engine.run(request) as? LLMResponse)?.text ?? ""
+    }
+// result.prompt goes to the image model; result.outcome, .profileID/.profileVersion and .original are provenance.
+```
+
+What `enhance(_:profile:...)` does:
+- **`auto` follows the profile's policy.** `required` always enhances. `recommended` enhances a brief that isn't already
+  detailed. `optional` leaves it alone. `always` enhances whenever there's an instruction.
+- **A brief that is already JSON** (a layout, Render JSON) always goes through as typed.
+- **Vision tasks pass through as typed** (`.needsVision`) until the kit has an image transport.
+- **Cancellation propagates.** It rethrows `CancellationError`; the template overloads still answer with the raw
+  prompt.
+- **Failures fall back to the brief as typed**, with the outcome saying why: an error, an unreadable answer, an empty
+  answer, or the `timeout` passing. Enhancement never blocks generation.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT; see [LICENSE](LICENSE). The two verbatim vendor prompts are Apache-2.0; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

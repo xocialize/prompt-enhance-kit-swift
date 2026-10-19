@@ -22,6 +22,11 @@ public struct TemplateLibrary: Sendable {
         templates[Key(capability: capability, task: task)] = template
     }
 
+    /// Every template, for `merge`.
+    var entries: [(key: (capability: Capability, task: EnhanceTask), template: PromptEnhanceTemplate)] {
+        templates.map { ((capability: $0.key.capability, task: $0.key.task), $0.value) }
+    }
+
     // MARK: - Seed templates (UPE0)
 
     private static let imageT2I = PromptEnhanceTemplate(system: """
