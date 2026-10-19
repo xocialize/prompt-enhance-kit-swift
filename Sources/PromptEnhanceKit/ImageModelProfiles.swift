@@ -7,12 +7,15 @@ public enum ImageModelProfiles {
     /// Z-Image and Z-Image Turbo, with Tongyi's own expander, verbatim. Their demo ships it switched off, so it's
     /// `optional`: `auto` leaves prompts alone.
     public static let zImage = EnhanceProfile(
-        id: "z-image", version: 1, title: "Z-Image",
+        id: "z-image", version: 2, title: "Z-Image",
         models: ["z-image-turbo", "z-image"],
         policy: .optional,
-        // The vendor substitutes the brief into the instruction, sends that as the system turn and a single space as
-        // the user turn (app.py, `APIPromptExpander.extend`).
-        instructions: [.textToImage: EnhanceInstructionSet(EnhanceInstruction(system: VendorPrompts.zImage, user: " "))],
+        // The vendor substitutes the brief into the instruction and sends that as the system turn (app.py,
+        // `APIPromptExpander.extend`). Its user turn is a single space; ours carries `zImageNudge`, in Chinese for a
+        // brief with CJK ideographs (an English nudge pulled a Chinese brief's answer into English).
+        instructions: [.textToImage: EnhanceInstructionSet(
+            EnhanceInstruction(system: VendorPrompts.zImage, user: zImageNudge),
+            chinese: EnhanceInstruction(system: VendorPrompts.zImage, user: zImageNudgeChinese))],
         output: .text(),
         passThrough: PassThroughRule(detailedAtWords: 80),
         backbone: .small,
@@ -20,10 +23,25 @@ public enum ImageModelProfiles {
         source: ProfileSource(
             origin: "https://huggingface.co/spaces/Tongyi-MAI/Z-Image-Turbo/blob/768cb50d847cdbba97c89533ae976be69cf5a5b8/pe.py",
             license: "Apache-2.0", verbatim: true,
-            adaptation: "None to the text. Sampling (temperature 0.7, top-p 0.8) is the vendor's."),
+            adaptation: "None to the vendor's text. The vendor's user turn is a single space; since v2 it carries one "
+                + "sentence of the kit's own (MIT), in English or, for a brief with CJK ideographs, Chinese, asking for "
+                + "prose in the brief's language, not a tag list, and only what is in the image: on a 4B backbone the "
+                + "expander answered a tag list and ended a rewrite with \"No text is present.\" (AB-R-0589). Sampling "
+                + "(temperature 0.7, top-p 0.8) is the vendor's."),
         notes: "Tongyi's demo has this expander switched off, and Turbo already scores well on raw prompts. The vendor ran "
             + "it on qwen3-max; a small backbone may manage less of its reasoning step. Text to render goes in double "
             + "quotes; Z-Image's text encoder reads 512 tokens.")
+
+    /// The user turn of `zImage`, in place of the vendor's single space: a nudge toward what the expander already asks
+    /// for (an objective, concrete visual description), for a small backbone. The kit's own text, MIT.
+    static let zImageNudge = "Answer in the language of the user's prompt, as flowing prose in complete sentences rather "
+        + "than a comma-separated list of tags, and describe only what is in the image."
+
+    /// `zImageNudge` for a brief with CJK ideographs, in Chinese. It names Chinese as the answer's language (with the
+    /// vendor's single space, Qwen3.5-4B int4 answered 20 of 20 Chinese briefs in English) and asks not to say what is
+    /// absent (a Chinese answer otherwise often closed with "画面中没有任何文字元素").
+    static let zImageNudgeChinese = "请用用户输入 prompt 的语言作答（中文输入就用中文写），写成连贯、完整的句子，不要写成逗号分隔的"
+        + "标签列表；只描述画面中存在的内容，不要写画面中没有什么。"
 
     /// Qwen-Image Flash, with Qwen-Image's own rewriter, verbatim: English and Chinese instructions chosen by the
     /// brief's script, one-line output, and Qwen's quality suffix. Qwen's example code rewrites every prompt, so
@@ -54,8 +72,14 @@ public enum ImageModelProfiles {
     /// FLUX.2 [klein] 4B and its base tier. BFL publishes no enhancer; this is original text following its prompting
     /// guidance (prose rather than tags, the subject first, rendered text in quotes), leaning into what klein does
     /// well: legible text, exact counts and spatial relations (mlxengine-image PROMPT-ENHANCER-INTEGRATION.md §5.1).
+    ///
+    /// v2: v1's "Don't add text, logos or people the brief doesn't ask for" came back as a closing "No text, logos, or
+    /// other people are present." (AB-R-0588, AB-R-0589), so the instruction no longer lists what to leave out, and asks
+    /// for every sentence to describe something visible. On Qwen3.5-4B int4, 60 rewrites of 12 briefs: absence
+    /// sentences 7 → 0, invented signs about as before (4, in scenes that carry them, such as a diner). "Put words in the
+    /// image only when the brief asks for them" made both worse, so the text rule stays conditional.
     public static let flux2Klein = EnhanceProfile(
-        id: "flux2-klein", version: 1, title: "FLUX.2 [klein]",
+        id: "flux2-klein", version: 2, title: "FLUX.2 [klein]",
         models: ["klein-4b", "klein-4b-base"],
         policy: .recommended,
         instructions: [.textToImage: EnhanceInstructionSet(EnhanceInstruction(system: """
@@ -67,9 +91,10 @@ public enum ImageModelProfiles {
             the brief gives, and make vague ones specific: exact counts, where each thing sits relative to the others, \
             concrete colours. When the brief asks for words in the image, write them exactly, inside double quotes, and \
             say where they appear and how they look (typeface, size, colour, the surface they're on); never translate \
-            them. Don't add text, logos or people the brief doesn't ask for. Describe only what should be in the image, \
-            never what shouldn't. Write 40 to 150 words, with no lists, tags or quality keywords such as "8K" or \
-            "masterpiece". Output only the prompt, with no preamble and no quotes around it.
+            them. Every sentence must describe something visible in the image: never say what is absent, and never \
+            close with a sentence such as "No text is present." End on a detail of the scene itself. Write 40 to 150 \
+            words, with no lists, tags or quality keywords such as "8K" or "masterpiece". Output only the prompt, with \
+            no preamble and no quotes around it.
             """))],
         output: .text(),
         passThrough: PassThroughRule(detailedAtWords: 60),

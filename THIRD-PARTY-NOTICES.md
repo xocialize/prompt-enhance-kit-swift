@@ -10,7 +10,10 @@ pinned sources below.
   file `pe.py` (`prompt_template`).
 - Licence: Apache-2.0 (the Space's declared licence). Copyright Tongyi-MAI (Alibaba).
 - Used by: `ImageModelProfiles.zImage`.
-- Changes: none to the text.
+- Changes: none to the text. The vendor sends a single space as the user turn; since profile v2 (kit 0.5.1) the profile
+  sends one sentence of the kit's own there (`ImageModelProfiles.zImageNudge`, MIT; `zImageNudgeChinese` for a brief
+  with CJK ideographs), asking for prose in the brief's language and only what is in the image. It's recorded in the
+  profile's `source.adaptation`.
 
 ## Qwen-Image prompt rewriter
 

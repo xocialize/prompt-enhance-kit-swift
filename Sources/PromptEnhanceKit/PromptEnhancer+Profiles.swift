@@ -148,9 +148,12 @@ extension PromptEnhancer {
 
     // MARK: - Decisions
 
-    /// Why a prompt goes through as typed without calling the backbone, or `nil` to enhance it.
-    static func decision(_ prompt: String, profile: EnhanceProfile, task: EnhanceTask,
-                         mode: EnhanceMode) -> EnhanceResult.Outcome? {
+    /// Why a prompt goes through as typed without calling the backbone, or `nil` to enhance it. This is the check
+    /// `enhance(_:profile:task:mode:...)` makes first, so a host can ask it before loading a backbone: `nil` means
+    /// `enhance` will call the backbone; an outcome is what `enhance` returns, with the prompt as typed, without
+    /// calling it. It reads only the prompt and the profile: no backbone, no I/O.
+    public static func decision(_ prompt: String, profile: EnhanceProfile, task: EnhanceTask,
+                                mode: EnhanceMode = .auto) -> EnhanceResult.Outcome? {
         guard profile.instructions[task] != nil else { return .noInstruction }
         if task.needsVision { return .needsVision }
         if profile.passThrough.structured, isStructured(prompt) { return .passedThrough }

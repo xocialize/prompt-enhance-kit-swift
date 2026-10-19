@@ -112,10 +112,59 @@ final class ProfileTests: XCTestCase {
         XCTAssertEqual(made.request.messages.count, 2)
         XCTAssertTrue(made.request.messages[0].content.hasSuffix("用户输入 prompt: a lighthouse"))
         XCTAssertFalse(made.request.messages[0].content.contains("{prompt}"))
-        XCTAssertEqual(made.request.messages[1].content, " ")
+        XCTAssertEqual(made.request.messages[0].content,
+                       VendorPrompts.zImage.replacingOccurrences(of: "{prompt}", with: "a lighthouse"),
+                       "the vendor's text is sent unchanged")
+        XCTAssertEqual(made.request.messages[1].content, ImageModelProfiles.zImageNudge)
         XCTAssertEqual(made.request.parameters.temperature, 0.7)
         XCTAssertEqual(made.request.parameters.topP, 0.8)
         XCTAssertEqual(made.request.parameters.maxTokens, 768)
+    }
+
+    func testZImageV2RecordsItsUserTurnNudge() throws {
+        let profile = ImageModelProfiles.zImage
+        XCTAssertEqual(profile.version, 2)
+        XCTAssertTrue(profile.source.verbatim, "the vendor's text itself is unchanged")
+        let adaptation = try XCTUnwrap(profile.source.adaptation)
+        XCTAssertTrue(adaptation.contains("user turn"), adaptation)
+        let nudge = ImageModelProfiles.zImageNudge
+        XCTAssertTrue(nudge.contains("language of the user's prompt"), "a Chinese brief keeps a Chinese answer")
+        XCTAssertTrue(nudge.contains("rather than a comma-separated list of tags"), "prose over tags")
+        XCTAssertFalse(nudge.contains("{prompt}"), "the brief stays in the vendor's slot only")
+        XCTAssertFalse(nudge.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) })
+        XCTAssertFalse(ImageModelProfiles.zImageNudgeChinese.contains("{prompt}"))
+    }
+
+    func testAChineseBriefGetsTheChineseNudgeAndTheSameVendorText() throws {
+        // An English nudge pulled the answer to "一只红狐狸站在新雪里" into English (the 0.5.1 live gate).
+        let brief = "一只红狐狸站在新雪里"
+        let made = try XCTUnwrap(PromptEnhancer().makeRequest(brief, profile: ImageModelProfiles.zImage,
+                                                              task: .textToImage))
+        XCTAssertTrue(made.chinese)
+        XCTAssertEqual(made.request.messages[0].content,
+                       VendorPrompts.zImage.replacingOccurrences(of: "{prompt}", with: brief))
+        XCTAssertEqual(made.request.messages[1].content, ImageModelProfiles.zImageNudgeChinese)
+        XCTAssertTrue(PromptEnhancer.containsCJK(ImageModelProfiles.zImageNudgeChinese))
+        XCTAssertEqual(made.request.parameters.temperature, 0.7, "the vendor's sampling either way")
+    }
+
+    func testKleinV2NoLongerListsWhatToLeaveOut() throws {
+        let profile = ImageModelProfiles.flux2Klein
+        XCTAssertEqual(profile.version, 2)
+        let system = try XCTUnwrap(profile.instructions[.textToImage]?.standard.system)
+        // v1's "Don't add text, logos or people…" came back as "No text, logos, or other people are present."
+        XCTAssertFalse(system.contains("logos"))
+        XCTAssertFalse(system.contains("people"))
+        XCTAssertTrue(system.contains("Every sentence must describe something visible in the image"))
+        XCTAssertTrue(system.contains("never say what is absent"))
+        // "Put words in the image only when…" primed invented signs and absence sentences: the text rule is conditional.
+        XCTAssertTrue(system.contains("When the brief asks for words in the image"))
+        XCTAssertFalse(system.contains("only when"))
+        // What v1 asked for is kept: quoted words verbatim, prose, no quality tags.
+        XCTAssertTrue(system.contains("inside double quotes"))
+        XCTAssertTrue(system.contains("never translate them"))
+        XCTAssertTrue(system.contains("\"8K\""))
+        XCTAssertEqual(profile.source, .original)
     }
 
     func testANilSystemSendsNoSystemTurn() throws {

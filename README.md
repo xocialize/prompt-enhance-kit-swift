@@ -99,9 +99,9 @@ text-to-image profiles (AB-D-0155, phase E1):
 
 | Profile | Models | Policy | Text |
 |---|---|---|---|
-| `z-image` | z-image-turbo, z-image | optional (the vendor's demo ships it off) | Tongyi's expander, verbatim (Apache-2.0) |
+| `z-image` | z-image-turbo, z-image | optional (the vendor's demo ships it off) | Tongyi's expander, verbatim (Apache-2.0); since v2 a one-sentence user turn of ours asks for prose |
 | `qwen-image` | qwen-image-flash | recommended | Qwen-Image's EN/ZH rewriter and suffix, verbatim (Apache-2.0) |
-| `flux2-klein` | klein-4b, klein-4b-base | recommended | original, following BFL's guidance |
+| `flux2-klein` | klein-4b, klein-4b-base | recommended | original, following BFL's guidance (v2: no closing "No text is present.") |
 | `mage-flow` | mage-flow, mage-flow-turbo | optional | original |
 
 FLUX 3 Klein has no profile: BFL's own upsampler runs inside flux3-klein-swift. The vendor texts' sources are pinned in
@@ -115,6 +115,14 @@ let result = try await PromptEnhancer(parameters: LLMParameters(temperature: 0.7
         (try await engine.run(request) as? LLMResponse)?.text ?? ""
     }
 // result.prompt goes to the image model; result.outcome, .profileID/.profileVersion and .original are provenance.
+```
+
+A host that loads its backbone on demand can ask first, with no backbone and no I/O (since 0.5.1):
+
+```swift
+if let skip = PromptEnhancer.decision(brief, profile: profile, task: .textToImage, mode: .auto) {
+    // Goes as typed; `enhance` would return `skip` without calling the backbone. Don't load it.
+}
 ```
 
 What `enhance(_:profile:...)` does:

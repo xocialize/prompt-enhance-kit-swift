@@ -142,7 +142,7 @@ public struct ProfileSource: Sendable, Equatable {
     public var license: String
     /// Whether the instruction is the vendor's text unchanged.
     public var verbatim: Bool
-    /// What was changed, if anything (e.g. the message layout).
+    /// What was changed or added around the vendor's text, if anything (e.g. the message layout, a user turn).
     public var adaptation: String?
 
     public init(origin: String, license: String, verbatim: Bool, adaptation: String? = nil) {
