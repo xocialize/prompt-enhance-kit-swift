@@ -44,17 +44,24 @@ public struct EnhanceResult: Sendable, Equatable {
     /// The size the answer suggests for the image, read from the profile's `sizeFields` (SenseNova's `canvas`, Ming's
     /// `canvas_settings.aspect_ratio`); `nil` when it names none.
     public var suggestedSize: SuggestedSize?
-    /// Why it failed, for logs.
+    /// The pixel canvas a compiled layout is laid out for (MOSS-Image's draft `width` and `height`): generate at exactly
+    /// this size. nil for every other answer, a caption draft included.
+    public var canvas: CanvasSize?
+    /// How many times the backbone was asked: 0 when it wasn't called, 2 when a profile's compiler rejected its first draft
+    /// and it was asked to fix it (`AnswerCompiler`), else 1.
+    public var attempts: Int
+    /// Why it failed, for logs; on a rewrite after a retry, why the first draft was rejected.
     public var failure: String?
 
     public var applied: Bool { outcome == .enhanced }
 
     public init(prompt: String, original: String, outcome: Outcome, profileID: String, profileVersion: Int,
                 usedChineseInstruction: Bool = false, fields: [String: String] = [:], suggestedSize: SuggestedSize? = nil,
-                failure: String? = nil) {
+                canvas: CanvasSize? = nil, attempts: Int = 0, failure: String? = nil) {
         self.prompt = prompt; self.original = original; self.outcome = outcome; self.profileID = profileID
         self.profileVersion = profileVersion; self.usedChineseInstruction = usedChineseInstruction
-        self.fields = fields; self.suggestedSize = suggestedSize; self.failure = failure
+        self.fields = fields; self.suggestedSize = suggestedSize; self.canvas = canvas
+        self.attempts = attempts; self.failure = failure
     }
 }
 
@@ -67,6 +74,11 @@ extension PromptEnhancer {
     /// it **rethrows cancellation** rather than answering with the raw prompt, so a cancelled job stops instead of
     /// generating from an unenhanced prompt. Every other failure (an error, a timeout, an empty or unreadable answer)
     /// returns the brief as typed, with the outcome saying why: enhancement never blocks generation.
+    ///
+    /// A profile that lays out a canvas (`laysOutCanvas`, MOSS-Image) is told `targetSize` and must answer for it: a
+    /// layout for another canvas fails, so the image always runs at the size its boxes are in. When a profile's compiler
+    /// rejects the backbone's draft, the backbone is asked once to fix it, with the compiler's message (MOSS-Image's
+    /// skill: "Fix validation errors in the draft and rerun"), within the same `timeout`.
     ///
     /// `timeout` bounds the backbone's answer. The run is cancelled when it expires; a backbone that ignores
     /// cancellation still delays the return until it finishes.
@@ -95,34 +107,67 @@ extension PromptEnhancer {
                          targetSize: (width: Int, height: Int)?, timeout: Duration?,
                          call: @escaping @Sendable (LLMRequest) async throws -> String) async throws -> EnhanceResult {
         func result(_ outcome: EnhanceResult.Outcome, _ text: String? = nil, chinese: Bool = false,
-                    fields: [String: String] = [:], size: SuggestedSize? = nil, failure: String? = nil) -> EnhanceResult {
+                    fields: [String: String] = [:], size: SuggestedSize? = nil, canvas: CanvasSize? = nil,
+                    attempts: Int = 0, failure: String? = nil) -> EnhanceResult {
             EnhanceResult(prompt: text ?? prompt, original: prompt, outcome: outcome, profileID: profile.id,
                           profileVersion: profile.version, usedChineseInstruction: chinese, fields: fields,
-                          suggestedSize: size, failure: failure)
+                          suggestedSize: size, canvas: canvas, attempts: attempts, failure: failure)
         }
         if let skip = Self.decision(prompt, profile: profile, task: task, mode: mode) { return result(skip) }
-        guard let (request, instruction, chinese) = makeRequest(prompt, profile: profile, task: task,
-                                                                targetSize: targetSize) else {
+        guard let (first, instruction, chinese) = makeRequest(prompt, profile: profile, task: task,
+                                                              targetSize: targetSize) else {
             return result(.noInstruction)
         }
-        let answer: String?
-        do {
-            answer = try await Self.withTimeout(timeout) { try await call(request) }
-        } catch {
-            if Task.isCancelled { throw CancellationError() }
-            return result(.failed, chinese: chinese, failure: "\(error)")
-        }
-        try Task.checkCancellation()
-        guard let answer else { return result(.timedOut, chinese: chinese) }
-        do {
-            guard let read = try Self.read(answer, output: profile.output, sizeFields: profile.sizeFields) else {
-                return result(.empty, chinese: chinese)
+        let deadline = timeout.map { ContinuousClock.now + $0 }
+        var request = first, attempts = 0
+        var rejected: String?
+        while true {
+            attempts += 1
+            let answer: String?
+            do {
+                let sent = request
+                answer = try await Self.withTimeout(deadline.map { $0 - ContinuousClock.now }) { try await call(sent) }
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                return result(.failed, chinese: chinese, attempts: attempts,
+                              failure: Self.failure("\(error)", after: rejected))
             }
-            return result(.enhanced, Self.append(instruction.suffix, to: read.prompt, chinese: chinese), chinese: chinese,
-                          fields: read.fields, size: read.size)
-        } catch {
-            return result(.failed, chinese: chinese, failure: "\(error)")
+            try Task.checkCancellation()
+            guard let answer else { return result(.timedOut, chinese: chinese, attempts: attempts) }
+            do {
+                guard let read = try Self.read(answer, output: profile.output, sizeFields: profile.sizeFields,
+                                               compiler: profile.compiler, targetSize: targetSize) else {
+                    return result(.empty, chinese: chinese, attempts: attempts)
+                }
+                return result(.enhanced, Self.append(instruction.suffix, to: read.prompt, chinese: chinese),
+                              chinese: chinese, fields: read.fields, size: read.size, canvas: read.canvas,
+                              attempts: attempts, failure: rejected)
+            } catch let rejection as Rejected where attempts == 1 {
+                // The skill's loop: the draft goes back with the compiler's message, once.
+                rejected = rejection.description
+                request = Self.retry(first, draft: rejection.draft, message: rejection.description,
+                                     compiler: rejection.compiler)
+            } catch {
+                return result(.failed, chinese: chinese, attempts: attempts,
+                              failure: Self.failure("\(error)", after: rejected))
+            }
         }
+    }
+
+    /// A failure's message, after the first draft's rejection when there was one.
+    static func failure(_ message: String, after rejected: String?) -> String {
+        rejected.map { "\($0); after a retry: \(message)" } ?? message
+    }
+
+    /// `first` again, its user turn followed by the rejected draft and the compiler's message.
+    static func retry(_ first: LLMRequest, draft: String, message: String, compiler: AnswerCompiler) -> LLMRequest {
+        var messages = first.messages
+        if let last = messages.lastIndex(where: { $0.role == .user }) {
+            messages[last] = ChatMessage(role: .user, content: messages[last].content + "\n\n"
+                                         + compiler.retryTurn(draft: draft, message: message))
+        }
+        return LLMRequest(messages: messages, parameters: first.parameters, mode: first.mode,
+                          responseFormat: first.responseFormat)
     }
 
     /// The request a profile makes for `prompt`, the instruction it used, and whether that was the Chinese variant.
@@ -198,16 +243,27 @@ extension PromptEnhancer {
         let description: String
     }
 
-    /// What a backbone's answer gives: the prompt, a JSON answer's other top-level scalars, and the size it suggests.
+    /// A draft a profile's compiler rejected, with its message: the backbone may fix it.
+    struct Rejected: Error, CustomStringConvertible {
+        let description: String
+        let draft: String
+        let compiler: AnswerCompiler
+    }
+
+    /// What a backbone's answer gives: the prompt, a JSON answer's other top-level scalars, the size it suggests, and a
+    /// compiled layout's canvas.
     struct Answer {
         var prompt: String
         var fields: [String: String] = [:]
         var size: SuggestedSize?
+        var canvas: CanvasSize?
     }
 
     /// The prompt and any extra fields from the backbone's answer, or `nil` when it said nothing. `sizeFields` are the
-    /// key paths a JSON answer's size is read from.
-    static func read(_ answer: String, output: EnhanceOutput, sizeFields: [[String]] = []) throws -> Answer? {
+    /// key paths a JSON answer's size is read from. A `compiler` makes the prompt from a JSON answer instead; a layout it
+    /// compiles must be for `targetSize`, when there is one.
+    static func read(_ answer: String, output: EnhanceOutput, sizeFields: [[String]] = [], compiler: AnswerCompiler? = nil,
+                     targetSize: (width: Int, height: Int)? = nil) throws -> Answer? {
         guard let answer = stripReasoning(answer) else { return nil }
         var text = stripFences(answer.trimmingCharacters(in: .whitespacesAndNewlines))
         switch output {
@@ -220,6 +276,7 @@ extension PromptEnhancer {
             return text.isEmpty ? nil : Answer(prompt: text)
         case .json(_, let promptField, let layout):
             guard !text.isEmpty else { return nil }
+            if let compiler { return try compile(text, with: compiler, targetSize: targetSize) }
             guard let (json, value) = JSONText.extract(text) else {
                 throw UnreadableAnswer(description: "The answer isn't JSON: \(text.prefix(120))")
             }
@@ -240,6 +297,27 @@ extension PromptEnhancer {
             }
             let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : Answer(prompt: trimmed, fields: fields, size: size)
+        }
+    }
+
+    /// A JSON answer made into the prompt by the vendor's code (`AnswerCompiler`). What the code rejects throws
+    /// `Rejected`.
+    static func compile(_ text: String, with compiler: AnswerCompiler,
+                        targetSize: (width: Int, height: Int)?) throws -> Answer {
+        switch compiler {
+        case .mossImageLayout:
+            let compiled: MOSSLayout.Compiled
+            do {
+                compiled = try MOSSLayout.compile(text)
+            } catch {
+                throw Rejected(description: "\(error)", draft: text, compiler: compiler)
+            }
+            let target = targetSize.map { CanvasSize(width: $0.width, height: $0.height) }
+            if let canvas = compiled.canvas, let target, canvas != target {
+                throw Rejected(description: "The layout is for a \(canvas) canvas, not the target \(target).",
+                               draft: text, compiler: compiler)
+            }
+            return Answer(prompt: compiled.prompt, canvas: compiled.canvas)
         }
     }
 

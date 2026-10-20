@@ -83,13 +83,15 @@ The seed templates are neutral, original text (no copied or unlicensed content, 
 register model-tuned profiles for specific backbones as needed (`TemplateLibrary.ltxVideo()` ships the
 LTX-2.3 profile).
 
-## Model profiles (v0.5, structured since v0.6)
+## Model profiles (v0.5, structured since v0.6, compiled layouts since v0.7)
 
 Templates are the neutral, model-agnostic layer. A **profile** is one model's enhancer, as data. It holds:
 - an instruction per task, with an optional Chinese variant chosen when the brief contains CJK ideographs;
 - how to read the answer: text, optionally joined to one line, or JSON, constrained where the backbone supports it, and
   written out compact or indented in the backbone's own key order;
 - where a JSON answer names the image's size (`sizeFields`, read into `EnhanceResult.suggestedSize`);
+- the vendor's own post-processing, ported (`compiler`: MOSS-Image's layout compiler), and the canvas it lays out for
+  (`EnhanceResult.canvas`);
 - a suffix;
 - when to pass a prompt through as typed;
 - the backbone class it needs;
@@ -97,7 +99,7 @@ Templates are the neutral, model-agnostic layer. A **profile** is one model's en
 - where its text came from, and under what licence.
 
 `ProfileLibrary` keys profiles by the model ids they serve. `ProfileLibrary.imageModels()` ships the image engine's
-text-to-image profiles (AB-D-0155: the prose ones from E1, SenseNova's Render JSON from E3):
+text-to-image profiles (AB-D-0155: the prose ones from E1, SenseNova's Render JSON and MOSS-Image's layouts from E3):
 
 | Profile | Models | Policy | Text |
 |---|---|---|---|
@@ -106,6 +108,7 @@ text-to-image profiles (AB-D-0155: the prose ones from E1, SenseNova's Render JS
 | `flux2-klein` | klein-4b, klein-4b-base | recommended | original, following BFL's guidance (v2: no closing "No text is present.") |
 | `mage-flow` | mage-flow, mage-flow-turbo | optional | original |
 | `sensenova-u1.5` | sensenova-u1, sensenova-u1-fast, sensenova-u1-fast-v1 | recommended, no word limit | SenseTime's Render JSON enhancer, verbatim (Apache-2.0); `large` backbone, compact JSON, canvas → `suggestedSize` |
+| `moss-image` | moss-image-sft, moss-image-base | optional (the vendor's skill is an opt-in agent tool) | OpenMOSS's prompt-enhancer skill, verbatim, and its layout compiler, ported (Apache-2.0); `large` backbone, temperature 0.3, the layout's canvas → `canvas` |
 
 **Structured profiles (v0.6, E3).** SenseNova U1.5 reads Render JSON as its prompt: subjects, scene, lighting,
 composition, style, camera, the visible copy, a canvas and a negative. The profile asks the backbone for it (constrained
@@ -114,6 +117,22 @@ compact in the backbone's key order. Its `canvas` names one of five 2K sizes, wh
 `targetSize` when the job has a size, and the profile is told it. On Qwen3.5-9B int4, 8 briefs × 2 seeds all came back
 in the vendor's exact format: the eleven keys, a valid canvas row, and every quoted literal in `visible_copy`. That took
 23 s per rewrite on average (prompt-enhance-e2e `--structured`).
+
+**Compiled layouts (v0.7, E3).** MOSS-Image reads a layout as its prompt: a `summary` and a flat list of `items` (a label,
+a caption, any literal text and a box), with boxes in pixels centred on the canvas (`abs_centralized`, `yxyx`). OpenMOSS's
+enhancer is an agent skill: the agent writes a draft with plain pixel boxes from the top-left, and the skill's script
+compiles it. Here the backbone writes the draft (the skill and its layout reference are the system turn), and the kit runs
+the script's Swift port (`AnswerCompiler.mossImageLayout`, `MOSSLayout`), with the script's checks, rounding and compact
+output. A layout is only right at its canvas, so:
+- pass `targetSize` always (a host's default size when the job names none);
+- a layout for another canvas fails;
+- generate at exactly `EnhanceResult.canvas`.
+
+A draft the script rejects goes back to the backbone once with the script's message, as the skill's agent fixes and reruns
+it (`EnhanceResult.attempts`). On Qwen3.5-9B int4 (prompt-enhance-e2e `--structured`, AB-R-0601) the layouts compiled
+with every quoted string in one text item 24 of 24 times on the gate's 8 briefs × 3 seeds, and 22 of 24 on two sets of
+briefs written after the profile was tuned. Both misses were drafts the script rejected twice, which go as typed. At the
+engine's default temperature of 0.7 it was 12 of 16, hence the profile's 0.3.
 
 `mingImage` (Ming-Image's layer JSON, inclusionAI's rewriter verbatim, MIT) is defined but **not shipped** in
 `imageModels()`. On the same backbone, only 3 of 12 answers were in its format at temperature 0.7, and 6 of 12 at 0.3:
@@ -152,5 +171,5 @@ What `enhance(_:profile:...)` does:
 
 ## License
 
-MIT; see [LICENSE](LICENSE). The verbatim vendor prompts are Apache-2.0 (Z-Image, Qwen-Image, SenseNova) and MIT
-(Ming-Image); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT; see [LICENSE](LICENSE). The verbatim vendor prompts are Apache-2.0 (Z-Image, Qwen-Image, SenseNova, MOSS-Image) and MIT
+(Ming-Image), and the port of MOSS-Image's layout compiler is Apache-2.0; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

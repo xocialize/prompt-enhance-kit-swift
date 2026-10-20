@@ -1,8 +1,9 @@
 /// Enhance profiles for the Pixel Agency Image Engine's text-to-image models (AB-D-0155). Prose profiles came with E1;
 /// SenseNova U1.5's Render JSON, a structured profile on a `large` backbone, with E3. Edit rewriters need to see the input
 /// image (E4). Ming-Image's layers are defined (`mingImage`) but not shipped: they failed the E3 gate on Qwen3.5-9B.
-/// MOSS-Image's layout (an agent skill with a converter script) and Qwen-Image 2.1's `{rewritten_prompt, wh_ratio}` (its
-/// rewriter's text is under the Qwen Research licence) are still to come.
+/// MOSS-Image's layout (`moss`: its agent skill verbatim, with the skill's converter script ported) came with E3's second
+/// part. Qwen-Image 2.1's `{rewritten_prompt, wh_ratio}` (its rewriter's text is under the Qwen Research licence) is still
+/// to come.
 ///
 /// FLUX 3 Klein has no profile here on purpose: BFL's own upsampler (a dedicated model) runs inside flux3-klein-swift.
 public enum ImageModelProfiles {
@@ -188,8 +189,61 @@ public enum ImageModelProfiles {
             + "the large class. The rewriter lays out a 1:1 canvas unless told otherwise, so pass the target size. Hex "
             + "codes and JSON quote marks in the prompt can show up in renders as glyphs (ming-image-oracle GATE-RESULTS).")
 
+    /// MOSS-Image SFT and Base, with OpenMOSS's own prompt-enhancer skill, verbatim: the brief laid out as a Layout draft
+    /// (`summary`, then `items`, each a label, a caption, any literal text and a pixel box), which the skill's own script
+    /// compiles (`AnswerCompiler.mossImageLayout`, ported) into the JSON the model reads, boxes centred on the canvas. A
+    /// layout is for one canvas, so a host passes the target size and generates at exactly `EnhanceResult.canvas`. The
+    /// vendor ships the skill as an optional agent tool and calls layout prompts experimental, so it's `optional`: `auto`
+    /// leaves prompts alone.
+    ///
+    /// The skill chooses between a caption and a Layout. This profile always asks for a Layout, which the skill honours
+    /// when asked; a caption draft still compiles, to its caption.
+    public static let moss = EnhanceProfile(
+        id: "moss-image", version: 3, title: "MOSS-Image",
+        models: ["moss-image-sft", "moss-image-base"],
+        policy: .optional,
+        // The agent the skill is written for reads SKILL.md, and references/layout.md before a Layout draft.
+        instructions: [.textToImage: EnhanceInstructionSet(EnhanceInstruction(system: mossSystem, user: mossUser))],
+        output: .json(layout: .compact),
+        compiler: .mossImageLayout,
+        passThrough: PassThroughRule(),
+        backbone: .large,
+        // The vendor sets no sampler (its agent is GPT-6-family). Measured on Qwen3.5-9B int4 (prompt-enhance-e2e
+        // `--structured`, v2): at 0.7, 12 of 16 drafts compiled with every quoted string whole; at 0.3, 24 of 24.
+        sampling: SamplingOverrides(temperature: 0.3, maxTokens: 4096),
+        source: ProfileSource(
+            origin: "https://github.com/OpenMOSS/MOSS-Image/tree/6f9aabb9db61576838287a18b046383b5402fe26/skills/moss-image-prompt-enhancer",
+            license: "Apache-2.0", verbatim: true,
+            adaptation: "None to the vendor's texts (SKILL.md and references/layout.md). The skill is an agent's: it reads both, "
+                + "writes a pixel draft to a file and runs scripts/compile_prompt.py on it. Here both texts are the system "
+                + "turn, joined by a line of the kit's own (MIT). The user turn is the kit's own too: it asks for a Layout, "
+                + "says there are no tools and the answer is the draft, puts each string the brief quotes in one text item "
+                + "(v1 split \"LATTE 4.50\" into \"LATTE\" and \"4.50\" on Qwen3.5-9B) and gives no other item a `text` "
+                + "(an empty one on an object was v2's commonest rejected draft), and carries the brief and the target "
+                + "resolution. The script is ported to Swift (`MOSSLayout`) and run on the answer, with its checks, its "
+                + "rounding and its compact output; a layout for another canvas than the target fails. A draft the script "
+                + "rejects goes back to the backbone once with the script's message, as the skill's agent would fix and rerun "
+                + "it (v1 lost 2 of 16 drafts to an empty `text` and a `panel` label)."),
+        notes: "OpenMOSS wrote the skill for GPT-6-family agents; here it runs on a local backbone of the large class. A layout "
+            + "is laid out in the pixels of one canvas and is only right at that size, so the image runs at the size the "
+            + "enhancer was told. The vendor's guide calls layout prompts experimental; MOSS-Image reads plain captions too.")
+
+    /// The system turn of `moss`: the skill, then the reference it says to read before a Layout draft, as an agent would
+    /// have them. The joining line is the kit's own, MIT.
+    static let mossSystem = VendorPrompts.mossImageSkill + "\n\nThe skill's file references/layout.md:\n\n"
+        + VendorPrompts.mossImageLayoutReference
+
+    /// The user turn of `moss`, in place of an agent's tools: what to answer with. The kit's own text, MIT. The kit adds
+    /// the target resolution after it.
+    static let mossUser = "Use the moss-image-prompt-enhancer skill above to write a Layout for the image idea below. You "
+        + "have no file or shell tools here, so save and run nothing: answer with the Layout draft itself and nothing else, "
+        + "the readable JSON object with `width`, `height`, `bbox_coord_space` \"abs\", `bbox_format` \"xyxy\", `summary` "
+        + "and `items`, its boxes in actual pixels from the canvas's top-left. The host compiles it by the bundled script's "
+        + "rules. Use the target resolution, when one is given, as `width` and `height`. Put each string the idea quotes "
+        + "in one text item's `text`, exactly as quoted, and give no other item a `text` field.\n\nImage idea: {prompt}"
+
     /// The shipped image profiles: every one above except `mingImage`.
-    public static let all = [zImage, qwenImage, flux2Klein, mageFlow, senseNova]
+    public static let all = [zImage, qwenImage, flux2Klein, mageFlow, senseNova, moss]
 }
 
 extension ProfileLibrary {

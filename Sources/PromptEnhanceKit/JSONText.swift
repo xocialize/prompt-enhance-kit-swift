@@ -129,3 +129,15 @@ public struct SuggestedSize: Sendable, Equatable {
         SuggestedSize(width: width ?? other.width, height: height ?? other.height, aspectRatio: aspectRatio ?? other.aspectRatio)
     }
 }
+
+/// A pixel canvas: the size a compiled layout is laid out for (`EnhanceResult.canvas`).
+public struct CanvasSize: Sendable, Equatable, Hashable, CustomStringConvertible {
+    public var width: Int
+    public var height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = width; self.height = height
+    }
+
+    public var description: String { "\(width)x\(height)" }
+}

@@ -25,6 +25,9 @@ public struct EnhanceProfile: Sendable, Equatable, Identifiable {
     /// `"1:1, 2048 × 2048 px"` (SenseNova's `canvas`, Ming's `canvas_settings.aspect_ratio`), read in order into
     /// `EnhanceResult.suggestedSize`. Empty for text profiles.
     public var sizeFields: [[String]]
+    /// The vendor's own code, run on a JSON answer before it becomes the prompt (MOSS-Image's layout compiler); nil for
+    /// none. A compiled layout is laid out for one canvas (`laysOutCanvas`).
+    public var compiler: AnswerCompiler?
     public var passThrough: PassThroughRule
     /// What kind of LLM can run this profile well; the host picks the package.
     public var backbone: BackboneClass
@@ -38,12 +41,45 @@ public struct EnhanceProfile: Sendable, Equatable, Identifiable {
 
     public init(id: String, version: Int, title: String, models: [String], policy: EnhancePolicy,
                 instructions: [EnhanceTask: EnhanceInstructionSet], output: EnhanceOutput = .text(),
-                sizeFields: [[String]] = [], passThrough: PassThroughRule = PassThroughRule(),
-                backbone: BackboneClass = .small, sampling: SamplingOverrides = SamplingOverrides(),
-                source: ProfileSource, notes: String? = nil) {
+                sizeFields: [[String]] = [], compiler: AnswerCompiler? = nil,
+                passThrough: PassThroughRule = PassThroughRule(), backbone: BackboneClass = .small,
+                sampling: SamplingOverrides = SamplingOverrides(), source: ProfileSource, notes: String? = nil) {
         self.id = id; self.version = version; self.title = title; self.models = models; self.policy = policy
-        self.instructions = instructions; self.output = output; self.sizeFields = sizeFields; self.passThrough = passThrough
-        self.backbone = backbone; self.sampling = sampling; self.source = source; self.notes = notes
+        self.instructions = instructions; self.output = output; self.sizeFields = sizeFields; self.compiler = compiler
+        self.passThrough = passThrough; self.backbone = backbone; self.sampling = sampling; self.source = source
+        self.notes = notes
+    }
+
+    /// Whether the rewrite is laid out for one pixel canvas (a MOSS-Image layout's boxes are in its pixels): a host
+    /// always passes `targetSize`, and generates at exactly `EnhanceResult.canvas`.
+    public var laysOutCanvas: Bool { compiler?.laysOutCanvas ?? false }
+}
+
+/// A vendor's post-processing of its enhancer's answer, ported from the vendor's code (`EnhanceProfile.compiler`).
+public enum AnswerCompiler: String, Sendable, Equatable, CaseIterable {
+    /// MOSS-Image's `compile_prompt.py` (its prompt-enhancer skill's script, Apache-2.0): a Layout draft with pixel boxes
+    /// from the canvas's top-left (`abs`, `xyxy`, its `width` and `height`) becomes the one-line JSON the model reads,
+    /// boxes as whole pixels centred on the canvas (`abs_centralized`, `yxyx`) and no canvas; a caption draft becomes its
+    /// caption. A draft the script rejects fails. The layout's canvas is `EnhanceResult.canvas`, and must be the target
+    /// size when one was passed.
+    case mossImageLayout
+
+    /// Whether the compiled prompt is laid out for the canvas the draft names.
+    public var laysOutCanvas: Bool {
+        switch self {
+        case .mossImageLayout: true
+        }
+    }
+
+    /// What follows the user turn when the backbone is asked to fix a rejected draft. The kit's own text, MIT.
+    func retryTurn(draft: String, message: String) -> String {
+        switch self {
+        case .mossImageLayout:
+            "Your draft was:\n\n\(draft)\n\ncompile_prompt.py rejected it: \(message)\n\nFix the draft and answer with the "
+                + "whole corrected draft, and nothing else. Leave a field out rather than empty (an item with no visible "
+                + "wording has no `text`), use only the fields references/layout.md lists, and give every box x_min < x_max "
+                + "and y_min < y_max inside the canvas."
+        }
     }
 }
 

@@ -10,12 +10,13 @@ final class ProfileTests: XCTestCase {
     func testImageModelsCoverEachCatalogModel() {
         let library = ProfileLibrary.imageModels()
         XCTAssertEqual(library.profiles.map(\.id),
-                       ["flux2-klein", "mage-flow", "qwen-image", "sensenova-u1.5", "z-image"])
+                       ["flux2-klein", "mage-flow", "moss-image", "qwen-image", "sensenova-u1.5", "z-image"])
         for (model, profile) in [("z-image-turbo", "z-image"), ("z-image", "z-image"), ("qwen-image-flash", "qwen-image"),
                                  ("klein-4b", "flux2-klein"), ("klein-4b-base", "flux2-klein"),
                                  ("mage-flow", "mage-flow"), ("mage-flow-turbo", "mage-flow"),
                                  ("sensenova-u1", "sensenova-u1.5"), ("sensenova-u1-fast", "sensenova-u1.5"),
-                                 ("sensenova-u1-fast-v1", "sensenova-u1.5")] {
+                                 ("sensenova-u1-fast-v1", "sensenova-u1.5"), ("moss-image-sft", "moss-image"),
+                                 ("moss-image-base", "moss-image")] {
             XCTAssertEqual(library.profile(forModel: model)?.id, profile, model)
         }
         XCTAssertNil(library.profile(forModel: "flux-3-klein"), "FLUX 3 Klein keeps its own upsampler")
@@ -38,7 +39,7 @@ final class ProfileTests: XCTestCase {
         tuned.version = 9
         base.merge(ProfileLibrary([tuned]))
         XCTAssertEqual(base.profile(forModel: "qwen-image-flash")?.version, 9)
-        XCTAssertEqual(base.profiles.count, 5)
+        XCTAssertEqual(base.profiles.count, 6)
     }
 
     func testTemplateLibraryMerge() {
@@ -332,7 +333,8 @@ final class ProfileTests: XCTestCase {
         for profile in ImageModelProfiles.all {
             if profile.source.verbatim {
                 XCTAssertEqual(profile.source.license, profile.id == "ming-image" ? "MIT" : "Apache-2.0", profile.id)
-                XCTAssertTrue(profile.source.origin.contains("/blob/"), "\(profile.id) pins its source")
+                XCTAssertNotNil(profile.source.origin.firstMatch(of: /\/(blob|tree)\/[0-9a-f]{40}\//),
+                                "\(profile.id) pins its source at a commit")
             } else {
                 XCTAssertEqual(profile.source, .original, profile.id)
             }

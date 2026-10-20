@@ -1,8 +1,9 @@
 # Third-party notices
 
-The kit is MIT-licensed (`LICENSE`). Four model profiles carry vendor prompt text verbatim: three under the Apache License
+The kit is MIT-licensed (`LICENSE`). Five model profiles carry vendor prompt text verbatim: four under the Apache License
 2.0 (`LICENSES/Apache-2.0.txt`), and Ming-Image's under the MIT License (`LICENSES/MIT-Ming-Image.txt`). All are in
-`Sources/PromptEnhanceKit/VendorPrompts.swift`, extracted mechanically from the pinned sources below.
+`Sources/PromptEnhanceKit/VendorPrompts.swift`, extracted mechanically from the pinned sources below. One vendor script,
+MOSS-Image's layout compiler, is ported to Swift (`Sources/PromptEnhanceKit/MOSSLayout.swift`), under Apache-2.0.
 
 ## Z-Image prompt expander
 
@@ -43,3 +44,27 @@ The kit is MIT-licensed (`LICENSE`). Four model profiles carry vendor prompt tex
 - Licence: MIT, Copyright (c) 2026 inclusionAI. The licence text is in `LICENSES/MIT-Ming-Image.txt`.
 - Used by: `ImageModelProfiles.mingImage`, which isn't in the shipped library (see the README).
 - Changes: none to the text. It is sent as the system turn, with the brief as the user turn.
+
+## MOSS-Image prompt-enhancer skill and layout compiler
+
+- Source: https://github.com/OpenMOSS/MOSS-Image at commit `6f9aabb9db61576838287a18b046383b5402fe26`, folder
+  `skills/moss-image-prompt-enhancer`:
+  - `SKILL.md`, without the file's final newline. The text's SHA-256 is
+    `f559b9c40cca4c944f1b6dae8306928a92211afa5543ad1e83a0616fc63405d4`.
+  - `references/layout.md`, without the file's final newline. The text's SHA-256 is
+    `2bcde35aa763acd76941d87571edfd2b1cfd191dd5053b28b76f435f194c2cbc`.
+  - `scripts/compile_prompt.py` (file SHA-256 `1d75780cf9f22f9ebed1a33d8100158f8d73ebfe59a5d435c1cc8c8e1374a8a3`),
+    ported, with its tests (`scripts/test_compile_prompt.py`) ported to `Tests/PromptEnhanceKitTests/MOSSLayoutTests.swift`.
+- Licence: Apache-2.0 (the repository's `LICENSE`, the stock Apache 2.0 text; the folder carries no other licence, and the
+  repository has no NOTICE file and no copyright line). Published by the OpenMOSS team.
+- Used by: `ImageModelProfiles.moss`, with `AnswerCompiler.mossImageLayout`.
+- Changes:
+  - **The texts:** none. The skill is written for an agent that reads `SKILL.md`, reads `references/layout.md` before a
+    Layout draft, writes the draft to a file and runs the script on it. Here the two texts are the system turn, joined by
+    one line of the kit's own (MIT). The user turn is the kit's own (MIT): it asks for a Layout, says there are no tools
+    and that the answer is the draft, and carries the brief and the target resolution.
+  - **The script:** translated from Python to Swift (`MOSSLayout`), with its checks, their order and messages, its
+    rounding and its output (`json.dumps(..., ensure_ascii=False, separators=(",", ":"))`). It reads the backbone's
+    answer (the whole text, or its first `{` to its last `}`) instead of a file and returns the prompt with the draft's
+    canvas instead of writing a file. The kit adds one check of its own: a layout for another canvas than the host's
+    target size fails.

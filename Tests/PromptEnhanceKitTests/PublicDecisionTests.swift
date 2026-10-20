@@ -32,6 +32,7 @@ final class PublicDecisionTests: XCTestCase {
                         let result = try await PromptEnhancer().enhance(brief, profile: profile, task: task,
                                                                         mode: mode) { _ in
                             called.value = true
+                            if profile.compiler != nil { return #"{"caption": "A red fox in snow."}"# }  // a MOSS draft
                             if case .json = profile.output { return #"{"subjects": ["a fox"]}"# }
                             return "A rewrite."
                         }
