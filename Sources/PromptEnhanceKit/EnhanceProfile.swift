@@ -21,6 +21,10 @@ public struct EnhanceProfile: Sendable, Equatable, Identifiable {
     /// The instruction for each task the profile covers. A task without one is passed through as typed.
     public var instructions: [EnhanceTask: EnhanceInstructionSet]
     public var output: EnhanceOutput
+    /// Where a JSON answer suggests the image's size: key paths to strings such as `"2048 x 2048"`, `"16:9"` or
+    /// `"1:1, 2048 × 2048 px"` (SenseNova's `canvas`, Ming's `canvas_settings.aspect_ratio`), read in order into
+    /// `EnhanceResult.suggestedSize`. Empty for text profiles.
+    public var sizeFields: [[String]]
     public var passThrough: PassThroughRule
     /// What kind of LLM can run this profile well; the host picks the package.
     public var backbone: BackboneClass
@@ -34,10 +38,11 @@ public struct EnhanceProfile: Sendable, Equatable, Identifiable {
 
     public init(id: String, version: Int, title: String, models: [String], policy: EnhancePolicy,
                 instructions: [EnhanceTask: EnhanceInstructionSet], output: EnhanceOutput = .text(),
-                passThrough: PassThroughRule = PassThroughRule(), backbone: BackboneClass = .small,
-                sampling: SamplingOverrides = SamplingOverrides(), source: ProfileSource, notes: String? = nil) {
+                sizeFields: [[String]] = [], passThrough: PassThroughRule = PassThroughRule(),
+                backbone: BackboneClass = .small, sampling: SamplingOverrides = SamplingOverrides(),
+                source: ProfileSource, notes: String? = nil) {
         self.id = id; self.version = version; self.title = title; self.models = models; self.policy = policy
-        self.instructions = instructions; self.output = output; self.passThrough = passThrough
+        self.instructions = instructions; self.output = output; self.sizeFields = sizeFields; self.passThrough = passThrough
         self.backbone = backbone; self.sampling = sampling; self.source = source; self.notes = notes
     }
 }
@@ -86,10 +91,20 @@ public enum EnhanceOutput: Sendable, Equatable {
     /// Free text. `singleLine` joins lines with spaces (Qwen-Image's rewriter does).
     case text(singleLine: Bool = false)
     /// JSON, constrained by the backbone where it supports structured output (contract 1.16.0). `promptField` names the
-    /// top-level string to use as the prompt; `nil` uses the whole JSON value, compacted, for formats the image model
-    /// reads as JSON (layouts, Render JSON). Other top-level scalars come back in `EnhanceResult.fields` (e.g.
-    /// `wh_ratio`), for the host to act on.
-    case json(schema: String? = nil, promptField: String? = nil)
+    /// top-level string to use as the prompt; `nil` uses the whole JSON value, written out as `layout` says, for formats
+    /// the image model reads as JSON (layouts, Render JSON). Other top-level scalars come back in `EnhanceResult.fields`
+    /// (e.g. `wh_ratio`), for the host to act on. An answer with prose around its object is read from the first `{` to
+    /// the last `}`, as SenseNova's own enhancer does.
+    case json(schema: String? = nil, promptField: String? = nil, layout: JSONLayout = .compact)
+}
+
+/// How a whole-JSON prompt is written out. Both keep the backbone's key order (vendors pass their enhancer's JSON as it
+/// came, and a model may read the order: subjects before scene, background layers first) and its characters unescaped.
+public enum JSONLayout: String, Sendable, Equatable, CaseIterable {
+    /// No whitespace outside strings, like Python's `json.dumps(..., separators=(",", ":"))` (SenseNova's enhancer).
+    case compact
+    /// Two-space indentation, `": "` after keys, like `json.dumps(..., indent=2)` (Ming-Image's reference prompts).
+    case pretty
 }
 
 /// When a prompt goes to the image model as typed.

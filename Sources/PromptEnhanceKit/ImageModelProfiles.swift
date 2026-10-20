@@ -1,6 +1,8 @@
-/// Enhance profiles for the Pixel Agency Image Engine's text-to-image models (AB-D-0155, phase E1). Text-only: edit
-/// rewriters need to see the input image (E4), and structured formats (SenseNova's Render JSON, MOSS and Ming layouts,
-/// Qwen-Image 2.1's `{rewritten_prompt, wh_ratio}`) come with E3.
+/// Enhance profiles for the Pixel Agency Image Engine's text-to-image models (AB-D-0155). Prose profiles came with E1;
+/// SenseNova U1.5's Render JSON, a structured profile on a `large` backbone, with E3. Edit rewriters need to see the input
+/// image (E4). Ming-Image's layers are defined (`mingImage`) but not shipped: they failed the E3 gate on Qwen3.5-9B.
+/// MOSS-Image's layout (an agent skill with a converter script) and Qwen-Image 2.1's `{rewritten_prompt, wh_ratio}` (its
+/// rewriter's text is under the Qwen Research licence) are still to come.
 ///
 /// FLUX 3 Klein has no profile here on purpose: BFL's own upsampler (a dedicated model) runs inside flux3-klein-swift.
 public enum ImageModelProfiles {
@@ -127,8 +129,67 @@ public enum ImageModelProfiles {
         source: .original,
         notes: "Mage-Flow's makers publish no enhancer. The RL tier (CFG 5) uses negative prompts; Turbo ignores them.")
 
-    /// Every image profile above.
-    public static let all = [zImage, qwenImage, flux2Klein, mageFlow]
+    /// SenseNova U1.5 and its 8-step tiers, with SenseTime's own image prompt enhancer, verbatim: the brief compiled into
+    /// Render JSON (subjects, scene, lighting, composition, style, camera, the visible copy, a canvas and a negative),
+    /// which the model reads as its prompt; the vendor passes the compact JSON straight to inference. The vendor makes it
+    /// the default step before inference, so it's `recommended` with no word limit: only a brief that is already JSON goes
+    /// as typed. `canvas` names one of five 2K sizes (1:1 2048², 3:2 2496×1664, 2:3 1664×2496, 16:9 2720×1536, 9:16
+    /// 1536×2720), read into `suggestedSize`; the vendor generates at it.
+    public static let senseNova = EnhanceProfile(
+        id: "sensenova-u1.5", version: 1, title: "SenseNova U1.5",
+        models: ["sensenova-u1", "sensenova-u1-fast", "sensenova-u1-fast-v1"],
+        policy: .recommended,
+        // The vendor sends the text as the Responses API's `instructions` and the brief as its `input`.
+        instructions: [.textToImage: EnhanceInstructionSet(EnhanceInstruction(system: VendorPrompts.senseNovaImagePE))],
+        output: .json(layout: .compact),
+        sizeFields: [["canvas", "resolution"], ["canvas", "aspect_ratio"]],
+        passThrough: PassThroughRule(),
+        backbone: .large,
+        // The vendor's `max_output_tokens`; its prompt targets 1,100 to 1,500 output tokens.
+        sampling: SamplingOverrides(maxTokens: 4096),
+        source: ProfileSource(
+            origin: "https://github.com/OpenSenseNova/SenseNova-U1/blob/a62fd54afed7a8d4c1cb4e10f0c39253d1be6fde/src/sensenova_u1_5/image_pe.py",
+            license: "Apache-2.0", verbatim: true,
+            adaptation: "None to the vendor's text (`IMAGE_PE_SYSTEM_PROMPT`). The vendor sends it as the Responses API's "
+                + "`instructions` with the brief as `input`; here they're the system and user turns. Its optional web-search "
+                + "addition isn't used. Like the vendor's `extract_json`, the answer is read from its first `{` to its last "
+                + "`}` and written out compact, in the backbone's key order."),
+        notes: "SenseTime recommends this step before every text-to-image run and ran it on gpt-5.6-terra; here it runs on "
+            + "a local backbone of the large class. A rewrite is about 1,100 to 1,500 tokens of JSON. Edits have their own "
+            + "rewriter, which needs to see the image (E4).")
+
+    /// Ming-Image, with inclusionAI's own text-to-image rewriter, verbatim: the brief expanded into a Figma-style layer
+    /// JSON (`canvas_settings`, then `layers` from background to top, each with normalised `coordinates` and hex
+    /// `color_specs`), which the model reads as its prompt. The vendor runs it as an optional step outside inference, so
+    /// it's `optional`: `auto` leaves prompts alone. The JSON is written out with two-space indentation, as the vendor's
+    /// example prompts are.
+    ///
+    /// **Not in `all`, so not in `imageModels()`.** On Qwen3.5-9B int4 it failed the E3 gate (prompt-enhance-e2e
+    /// `--structured`, 6 briefs × 2 seeds): 3 of 12 answers in the vendor's format at temperature 0.7, 6 of 12 at 0.3. The
+    /// backbone anchored layers at their top-left corner rather than their centre (`cx: 0.000, cy: 0.000, w: 1.000`),
+    /// wrote coordinates without three decimals, and repeated a quoted string. The vendor suggests far larger rewriters
+    /// (Ling-3.0-flash-VL, qwen3.8-27B). A host that has one can register it.
+    public static let mingImage = EnhanceProfile(
+        id: "ming-image", version: 1, title: "Ming-Image",
+        models: ["ming-image"],
+        policy: .optional,
+        instructions: [.textToImage: EnhanceInstructionSet(EnhanceInstruction(system: VendorPrompts.mingImageRewriter))],
+        output: .json(layout: .pretty),
+        sizeFields: [["canvas_settings", "aspect_ratio"]],
+        passThrough: PassThroughRule(),
+        backbone: .large,
+        sampling: SamplingOverrides(maxTokens: 3072),
+        source: ProfileSource(
+            origin: "https://github.com/inclusionAI/Ming-Image/blob/578e21e081a7cd385b6c79e36df7e419155681b1/assets/t2i_rewriter_system_prompt.txt",
+            license: "MIT", verbatim: true,
+            adaptation: "None to the vendor's text, without the file's final newline. The vendor doesn't say how to send it; "
+                + "here it's the system turn, with the brief as the user turn."),
+        notes: "inclusionAI suggests Ling-3.0-flash-VL or qwen3.8-27B as the rewriter; here it runs on a local backbone of "
+            + "the large class. The rewriter lays out a 1:1 canvas unless told otherwise, so pass the target size. Hex "
+            + "codes and JSON quote marks in the prompt can show up in renders as glyphs (ming-image-oracle GATE-RESULTS).")
+
+    /// The shipped image profiles: every one above except `mingImage`.
+    public static let all = [zImage, qwenImage, flux2Klein, mageFlow, senseNova]
 }
 
 extension ProfileLibrary {

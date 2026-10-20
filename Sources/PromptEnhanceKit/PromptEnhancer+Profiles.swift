@@ -41,16 +41,20 @@ public struct EnhanceResult: Sendable, Equatable {
     public var usedChineseInstruction: Bool
     /// Other top-level scalars of a JSON answer (e.g. `wh_ratio`), as strings.
     public var fields: [String: String]
+    /// The size the answer suggests for the image, read from the profile's `sizeFields` (SenseNova's `canvas`, Ming's
+    /// `canvas_settings.aspect_ratio`); `nil` when it names none.
+    public var suggestedSize: SuggestedSize?
     /// Why it failed, for logs.
     public var failure: String?
 
     public var applied: Bool { outcome == .enhanced }
 
     public init(prompt: String, original: String, outcome: Outcome, profileID: String, profileVersion: Int,
-                usedChineseInstruction: Bool = false, fields: [String: String] = [:], failure: String? = nil) {
+                usedChineseInstruction: Bool = false, fields: [String: String] = [:], suggestedSize: SuggestedSize? = nil,
+                failure: String? = nil) {
         self.prompt = prompt; self.original = original; self.outcome = outcome; self.profileID = profileID
         self.profileVersion = profileVersion; self.usedChineseInstruction = usedChineseInstruction
-        self.fields = fields; self.failure = failure
+        self.fields = fields; self.suggestedSize = suggestedSize; self.failure = failure
     }
 }
 
@@ -91,10 +95,10 @@ extension PromptEnhancer {
                          targetSize: (width: Int, height: Int)?, timeout: Duration?,
                          call: @escaping @Sendable (LLMRequest) async throws -> String) async throws -> EnhanceResult {
         func result(_ outcome: EnhanceResult.Outcome, _ text: String? = nil, chinese: Bool = false,
-                    fields: [String: String] = [:], failure: String? = nil) -> EnhanceResult {
+                    fields: [String: String] = [:], size: SuggestedSize? = nil, failure: String? = nil) -> EnhanceResult {
             EnhanceResult(prompt: text ?? prompt, original: prompt, outcome: outcome, profileID: profile.id,
                           profileVersion: profile.version, usedChineseInstruction: chinese, fields: fields,
-                          failure: failure)
+                          suggestedSize: size, failure: failure)
         }
         if let skip = Self.decision(prompt, profile: profile, task: task, mode: mode) { return result(skip) }
         guard let (request, instruction, chinese) = makeRequest(prompt, profile: profile, task: task,
@@ -111,11 +115,11 @@ extension PromptEnhancer {
         try Task.checkCancellation()
         guard let answer else { return result(.timedOut, chinese: chinese) }
         do {
-            guard let (text, fields) = try Self.read(answer, output: profile.output) else {
+            guard let read = try Self.read(answer, output: profile.output, sizeFields: profile.sizeFields) else {
                 return result(.empty, chinese: chinese)
             }
-            return result(.enhanced, Self.append(instruction.suffix, to: text, chinese: chinese), chinese: chinese,
-                          fields: fields)
+            return result(.enhanced, Self.append(instruction.suffix, to: read.prompt, chinese: chinese), chinese: chinese,
+                          fields: read.fields, size: read.size)
         } catch {
             return result(.failed, chinese: chinese, failure: "\(error)")
         }
@@ -139,7 +143,7 @@ extension PromptEnhancer {
         messages.append(ChatMessage(role: .user, content: user))
         let format: ResponseFormat? = switch profile.output {
         case .text: nil
-        case .json(let schema, _): schema.map { .jsonSchema($0) } ?? .json(container: .object)
+        case .json(let schema, _, _): schema.map { .jsonSchema($0) } ?? .json(container: .object)
         }
         let request = LLMRequest(messages: messages, parameters: profile.sampling.applied(to: parameters),
                                  mode: .promptEnhance, responseFormat: format)
@@ -194,8 +198,16 @@ extension PromptEnhancer {
         let description: String
     }
 
-    /// The prompt and any extra fields from the backbone's answer, or `nil` when it said nothing.
-    static func read(_ answer: String, output: EnhanceOutput) throws -> (String, [String: String])? {
+    /// What a backbone's answer gives: the prompt, a JSON answer's other top-level scalars, and the size it suggests.
+    struct Answer {
+        var prompt: String
+        var fields: [String: String] = [:]
+        var size: SuggestedSize?
+    }
+
+    /// The prompt and any extra fields from the backbone's answer, or `nil` when it said nothing. `sizeFields` are the
+    /// key paths a JSON answer's size is read from.
+    static func read(_ answer: String, output: EnhanceOutput, sizeFields: [[String]] = []) throws -> Answer? {
         guard let answer = stripReasoning(answer) else { return nil }
         var text = stripFences(answer.trimmingCharacters(in: .whitespacesAndNewlines))
         switch output {
@@ -205,10 +217,10 @@ extension PromptEnhancer {
                 text = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }.joined(separator: " ")
             }
-            return text.isEmpty ? nil : (text, [:])
-        case .json(_, let promptField):
+            return text.isEmpty ? nil : Answer(prompt: text)
+        case .json(_, let promptField, let layout):
             guard !text.isEmpty else { return nil }
-            guard let value = try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]) else {
+            guard let (json, value) = JSONText.extract(text) else {
                 throw UnreadableAnswer(description: "The answer isn't JSON: \(text.prefix(120))")
             }
             var fields: [String: String] = [:]
@@ -218,16 +230,16 @@ extension PromptEnhancer {
                     else if let number = scalar as? NSNumber { fields[key] = number.stringValue }
                 }
             }
+            let size = sizeFields.compactMap { JSONText.scalar(at: $0, in: value).flatMap(JSONText.size) }
+                .reduce(nil as SuggestedSize?) { found, next in found?.filling(from: next) ?? next }
             guard let promptField else {
-                let compact = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes,
-                                                                                          .fragmentsAllowed])
-                return (String(decoding: compact, as: UTF8.self), fields)
+                return Answer(prompt: JSONText.format(json, layout: layout), fields: fields, size: size)
             }
             guard let prompt = (value as? [String: Any])?[promptField] as? String else {
                 throw UnreadableAnswer(description: "The answer has no string \"\(promptField)\".")
             }
             let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : (trimmed, fields)
+            return trimmed.isEmpty ? nil : Answer(prompt: trimmed, fields: fields, size: size)
         }
     }
 
